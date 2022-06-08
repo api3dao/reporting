@@ -46,8 +46,8 @@ export const sqlQueries: Record<string, string> = {
   // SELECT SUM(bn_to_numeric(transaction_data->'gasUsed'->>'hex') * bn_to_numeric(transaction_data->'effectiveGasPrice'->>'hex')) FROM dapi_events WHERE event_data->>'address' = '0xd7CA5BD7a45985D271F216Cb1CAD82348464f6d5';
   // Calculate beacon gas costs for all DapiServer addresses and group results
   'beacons-gas-cost-all':
-    "SELECT event_data->>'address' as address, chain, SUM(bn_to_numeric(transaction_data->'gasUsed'->>'hex') * bn_to_numeric(transaction_data->'effectiveGasPrice'->>'hex')) as totalfees FROM dapi_events GROUP BY address, chain;",
-  'beacons-gas-cost-time':
+    "SELECT event_data->>'address' as address, chain, SUM(bn_to_numeric(transaction_data->'gasUsed'->>'hex') * bn_to_numeric(transaction_data->'effectiveGasPrice'->>'hex')) as totalfees FROM dapi_events _DATE_ GROUP BY address, chain;",
+  'beacons-gas-cost-interval':
     "SELECT event_data->>'address' as address, chain, SUM(bn_to_numeric(transaction_data->'gasUsed'->>'hex') * bn_to_numeric(transaction_data->'effectiveGasPrice'->>'hex')) as totalfees FROM dapi_events WHERE time > NOW() - INTERVAL '_INTERVAL_ _TIME_' GROUP BY address, chain;",
 };
 
@@ -73,18 +73,28 @@ export const getContractAddress = (deployments: Deployments, params: ContractAdd
 };
 
 export const parseArguments = (deployments: Deployments, args: string[]) => {
-  const parsedArgs = minimist(args, { string: ['query', 'chain', 'time', 'interval', 'output'] });
-  console.log('parsedArgs', parsedArgs);
-  let { query, chain, time, interval, output } = parsedArgs;
+  const parsedArgs = minimist(args, { string: ['query', 'chain', 'time', 'interval', 'start', 'end', 'output'] });
 
+  let { query, chain, time, interval, start, end, output } = parsedArgs;
+
+  // Get DapiServer address if a chain is specified
   let address;
   if (chain) address = getContractAddress(deployments, { chainName: chain });
 
-  return { query, chain, address, time, interval, output };
+  return { query, chain, address, time, interval, start, end, output };
+};
+
+export const parseDate = (date: string) => {
+  const splitDateArray = date.split('-');
+  const day = parseInt(splitDateArray[0]);
+  const month = parseInt(splitDateArray[1]) - 1;
+  const year = parseInt(splitDateArray[2]);
+
+  return new Date(year, month, day).getTime() / 1000;
 };
 
 export const parseQuery = (args: ParseQueryParams) => {
-  const { query, chain, address, time, interval, output } = args;
+  const { query, chain, address, time, interval, start, end, output } = args;
 
   if (query.includes('custom:')) return query.split('custom:')[1].trim();
 
@@ -95,44 +105,75 @@ export const parseQuery = (args: ParseQueryParams) => {
       `The query is not supported. To use a custom query please use the custom query format: --query="custom: <CUSTOM SQL QUERY>"`
     );
 
+  // Address
   if (address) queryToSqlQuery = queryToSqlQuery.replace('_ADDRESS_', address);
+
+  // Interval inputs
   if (time) queryToSqlQuery = queryToSqlQuery.replace('_TIME_', timeArgToTimeWord[time]);
   if (interval) queryToSqlQuery = queryToSqlQuery.replace('_INTERVAL_', interval);
+
+  // Date inputs
+  if (start || end) {
+    const startTimestamp = start ? parseDate(start) : null;
+    const endTimestamp = end ? parseDate(end) : null;
+
+    if (start && end) {
+      queryToSqlQuery = queryToSqlQuery.replace(
+        '_DATE_',
+        `WHERE extract(epoch from time) > ${startTimestamp} AND extract(epoch from time) < ${endTimestamp}`
+      );
+    } else if (start && !end) {
+      queryToSqlQuery = queryToSqlQuery.replace('_DATE_', `WHERE extract(epoch from time) > ${startTimestamp} `);
+    } else if (end && !start) {
+      queryToSqlQuery = queryToSqlQuery.replace('_DATE_', `WHERE extract(epoch from time) < ${endTimestamp} `);
+    }
+  } else {
+    queryToSqlQuery = queryToSqlQuery.replace('_DATE_', ``);
+  }
 
   return queryToSqlQuery;
 };
 
 export const processSqlOutputToHtml = async (output: any) => {
   let htmlContent = '';
-
-  output.rows.forEach((row: Record<string, string>) =>
+  output.rows.forEach((row: Record<string, string>) => {
+    let rowContent = '';
     Object.entries(row).forEach(([key, value]) => {
+      // Handle JSON objects
       let formattedValue = typeof value === 'object' ? JSON.stringify(value) : value;
 
+      let dataContent = '';
+
+      // Handle extra fields based on query result data
       // Add in the chain name when a chainId is found in the output
       if (key === 'chain')
-        htmlContent += `<tr><td>${'name'}</td><td>${deployments.chainNames[formattedValue]}</td></tr>`;
+        dataContent += `<tr><td>${'name'}</td><td>${deployments.chainNames[formattedValue]}</td></tr>`;
+
+      // Handle specific result keys, e.g. formatting wei values
       if (key === 'totalfees') {
-        return (htmlContent += `<tr><td>${key}</td><td>${ethers.utils.formatEther(
-          ethers.BigNumber.from(formattedValue)
-        )}</td></tr>`);
+        dataContent += `<td>${key}</td><td>${ethers.utils.formatEther(ethers.BigNumber.from(formattedValue))}</td>`;
+      } else {
+        dataContent += `<td>${key}</td><td>${formattedValue}</td>`;
       }
 
-      htmlContent += `<tr><td>${key}</td><td>${formattedValue}</td></tr>`;
-    })
-  );
+      rowContent += `<tr>${dataContent}</tr>`;
+    });
+    console.log('rowcontent', rowContent);
+    htmlContent += `<table style="margin-bottom:1rem;">${rowContent}</table>`;
+  });
+  console.log('htmlCOntent', htmlContent);
 
-  const html = `<table>${htmlContent}</table>`;
+  const html = `${htmlContent}`;
 
   const timestamp = Date.now();
 
-  return fs.writeFileSync(path.join(__dirname, `../exports/${'report'}_${timestamp}.html`), html);
+  return fs.writeFileSync(path.join(__dirname, `../exports/${'report'}_${'timestamp'}.html`), html);
 };
 
 export const processSqlOutputToJson = (chainName: string, output: any) => {
   const timestamp = Date.now();
   return fs.writeFileSync(
-    path.join(__dirname, `../exports/${chainName}_${timestamp}.json`),
+    path.join(__dirname, `../exports/${chainName}_${'timestamp'}.json`),
     JSON.stringify(output, null, 2)
   );
 };

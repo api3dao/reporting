@@ -16,5 +16,7 @@ export interface ParseQueryParams {
   address?: string;
   time: string;
   interval: string;
+  start?: string;
+  end?: string;
   output: string;
 }
