@@ -1,0 +1,41 @@
+name: Continuous Build
+
+on:
+  push:
+  pull_request:
+    branches:
+      - master
+    types: [opened, synchronize, reopened]
+
+env:
+  DOCKER_BUILDKIT: 1
+  TARGET_NODE_VERSION: '14.17.1'
+
+jobs:
+  build-and-push:
+    name: Build docker image and push to Docker Hub
+    runs-on: ubuntu-latest
+    # Don't run twice for a push within an internal PR
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
+    steps:
+      - name: Clone
+        uses: actions/checkout@v2
+      - name: Setup Node
+        uses: actions/setup-node@v2
+        with:
+          node-version: ${{ env.TARGET_NODE_VERSION }}
+          cache: yarn
+      - name: Install Dependencies
+        run: yarn install
+      - name: Build
+        run: yarn build
+      - name: Build docker image
+        run: yarn docker
+      - name: Login to DockerHub
+        uses: docker/login-action@v1
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Push docker image
+        run: |
+          docker push api3/reporting:latest

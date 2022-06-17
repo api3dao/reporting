@@ -17,7 +17,11 @@
     "prettier:write": "prettier --write \"./**/*.{js,sol,ts,md,yml,json}\" --loglevel silent",
     "lint": "yarn run lint:eslint && yarn prettier:check",
     "lint:eslint": "eslint . --ext .js,.ts",
-    "lint:eslint:fix": "eslint . --ext .js,.ts --fix"
+    "lint:eslint:fix": "eslint . --ext .js,.ts --fix",
+    "clean": "rimraf -rf ./dist *.tgz",
+    "compile": "tsc -p tsconfig.json",
+    "build": "yarn run clean && yarn run compile",
+    "docker": "docker build -t api3/reporting:latest -f docker/Dockerfile ."
   },
   "author": "",
   "license": "MIT",
